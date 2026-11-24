@@ -22,6 +22,8 @@
     "build:packages": "npm run --workspace=@trivio.ink/core build && npm run --workspace=@trivio.ink/node build && npm run --workspace=@trivio.ink/react build",
     "typecheck": "npm run --workspaces --if-present typecheck",
     "test": "vitest run",
+    "test:unit": "vitest run --exclude tests/api-db.integration.test.ts",
+    "test:db": "vitest run tests/api-db.integration.test.ts",
     "check": "npm run build && npm run typecheck && npm test",
     "validate:pr": "node scripts/validate-pr-description.mjs",
     "verify:release": "node scripts/verify-consumer-acceptance.mjs",

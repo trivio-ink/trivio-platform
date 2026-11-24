@@ -15,6 +15,21 @@ jobs:
   validate:
     name: Validate Monorepo
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgrespassword
+          POSTGRES_DB: trivio_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -31,11 +46,25 @@ jobs:
       - name: Generate Prisma client
         run: npm run --workspace=@trivio-apps/api prisma:generate
 
+      - name: Deploy Prisma migrations to test database
+        run: npx prisma migrate deploy --schema=apps/api/prisma/schema.prisma
+        env:
+          DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/trivio_test?schema=public
+
       - name: Build packages
         run: npm run build
 
       - name: Typecheck TypeScript
         run: npm run typecheck
 
-      - name: Run unit tests
+      - name: Run mandatory PostgreSQL integration tests
+        run: npm run test:db
+        env:
+          DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/trivio_test?schema=public
+          REQUIRE_DB: "true"
+
+      - name: Run all unit and integration tests
         run: npm test
+        env:
+          DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/trivio_test?schema=public
+          REQUIRE_DB: "true"

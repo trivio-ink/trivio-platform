@@ -59,14 +59,19 @@ describe('Stage 4C.1: NestJS Cloud API & Data Foundation', () => {
       guard = new AuthBoundaryGuard(reflector);
     });
 
-    function mockExecutionContext(headers: Record<string, string>, isPublic = false, requiredRoles?: string[]) {
+    function mockExecutionContext(
+      headers: Record<string, string> = {},
+      isPublic = false,
+      requiredRoles?: string[],
+      authContext?: { workspaceId: string; actorId: string; roles?: string[] },
+    ) {
       vi.spyOn(reflector, 'getAllAndOverride').mockImplementation((key) => {
         if (key === 'isPublic') return isPublic;
         if (key === 'roles') return requiredRoles;
         return undefined;
       });
 
-      const request = { headers, workspaceId: '', actorId: '', roles: [] as string[] };
+      const request = { headers, workspaceId: '', actorId: '', roles: [] as string[], authContext };
       return {
         getHandler: vi.fn(),
         getClass: vi.fn(),
@@ -77,56 +82,78 @@ describe('Stage 4C.1: NestJS Cloud API & Data Foundation', () => {
       };
     }
 
-    it('permits public routes without authentication headers', () => {
+    it('permits public routes without authentication headers', async () => {
       const ctx = mockExecutionContext({}, true);
-      const allowed = guard.canActivate(ctx as any);
+      const allowed = await guard.canActivate(ctx as any);
       expect(allowed).toBe(true);
     });
 
-    it('rejects unauthenticated requests missing workspace and actor context (deny-by-default)', () => {
+    it('rejects unauthenticated requests missing workspace and actor context (deny-by-default)', async () => {
       const ctx = mockExecutionContext({});
-      expect(() => guard.canActivate(ctx as any)).toThrow(UnauthorizedException);
+      await expect(guard.canActivate(ctx as any)).rejects.toThrow(UnauthorizedException);
     });
 
-    it('authenticates valid test identity headers in test/dev environment', () => {
+    it('negative test: strictly rejects forged x-test-* request headers off the wire', async () => {
       const ctx = mockExecutionContext({
-        'x-test-workspace-id': 'ws_acme_corp',
-        'x-test-actor-id': 'usr_alice_123',
-        'x-test-roles': 'ADMIN,MEMBER',
+        'x-test-workspace-id': 'ws_forged_hacker',
+        'x-test-actor-id': 'usr_attacker_666',
+        'x-test-roles': 'OWNER,ADMIN',
       });
 
-      const allowed = guard.canActivate(ctx as any);
+      await expect(guard.canActivate(ctx as any)).rejects.toThrow(
+        /Arbitrary test identity headers are strictly prohibited/,
+      );
+    });
+
+    it('authenticates via controlled dependency-injected test AuthContextResolver', async () => {
+      const testResolver = {
+        resolve: vi.fn().mockResolvedValue({
+          workspaceId: 'ws_acme_corp',
+          actorId: 'usr_alice_123',
+          roles: ['ADMIN', 'MEMBER'],
+        }),
+      };
+
+      const customGuard = new AuthBoundaryGuard(reflector, testResolver);
+      const ctx = mockExecutionContext({});
+
+      const allowed = await customGuard.canActivate(ctx as any);
       expect(allowed).toBe(true);
       expect(ctx._request.workspaceId).toBe('ws_acme_corp');
       expect(ctx._request.actorId).toBe('usr_alice_123');
       expect(ctx._request.roles).toEqual(['ADMIN', 'MEMBER']);
     });
 
-    it('enforces RBAC and rejects actors lacking required roles', () => {
-      const ctx = mockExecutionContext(
-        {
-          'x-test-workspace-id': 'ws_acme_corp',
-          'x-test-actor-id': 'usr_bob_viewer',
-          'x-test-roles': 'VIEWER',
-        },
-        false,
-        ['OWNER', 'ADMIN'],
-      );
+    it('enforces RBAC via AuthContextResolver and rejects actors lacking required roles', async () => {
+      const testResolver = {
+        resolve: vi.fn().mockResolvedValue({
+          workspaceId: 'ws_acme_corp',
+          actorId: 'usr_bob_viewer',
+          roles: ['VIEWER'],
+        }),
+      };
 
-      expect(() => guard.canActivate(ctx as any)).toThrow(ForbiddenException);
+      const customGuard = new AuthBoundaryGuard(reflector, testResolver);
+      const ctx = mockExecutionContext({}, false, ['OWNER', 'ADMIN']);
+
+      await expect(customGuard.canActivate(ctx as any)).rejects.toThrow(ForbiddenException);
     });
 
-    it('prohibits public CRUD access in production without Stage 4C.2 authentication', () => {
+    it('prohibits public CRUD access in production without Stage 4C.2 authentication', async () => {
       const originalEnv = process.env['NODE_ENV'];
       process.env['NODE_ENV'] = 'production';
 
       try {
-        const ctx = mockExecutionContext({
-          'x-test-workspace-id': 'ws_acme_corp',
-          'x-test-actor-id': 'usr_alice_123',
-        });
+        const testResolver = {
+          resolve: vi.fn().mockResolvedValue({
+            workspaceId: 'ws_acme_corp',
+            actorId: 'usr_alice_123',
+          }),
+        };
+        const customGuard = new AuthBoundaryGuard(reflector, testResolver);
+        const ctx = mockExecutionContext({});
 
-        expect(() => guard.canActivate(ctx as any)).toThrow(ForbiddenException);
+        await expect(customGuard.canActivate(ctx as any)).rejects.toThrow(ForbiddenException);
       } finally {
         process.env['NODE_ENV'] = originalEnv;
       }

@@ -9,6 +9,7 @@ export interface RecordAuditEventInput {
   entityType: string;
   entityId: string;
   payload: Record<string, unknown>;
+  tx?: Prisma.TransactionClient;
 }
 
 @Injectable()
@@ -18,8 +19,9 @@ export class AuditService {
   constructor(private readonly prisma: PrismaService) {}
 
   async logEvent(input: RecordAuditEventInput) {
+    const client = input.tx ?? this.prisma;
     try {
-      const record = await this.prisma.auditEvent.create({
+      const record = await client.auditEvent.create({
         data: {
           workspaceId: input.workspaceId,
           actorId: input.actorId,
@@ -32,7 +34,9 @@ export class AuditService {
       return record;
     } catch (error) {
       this.logger.error(`Failed to record audit event: ${(error as Error).message}`);
-      // Audit failure shouldn't necessarily crash callers unless strict audit is mandated
+      if (input.tx) {
+        throw error;
+      }
       return null;
     }
   }

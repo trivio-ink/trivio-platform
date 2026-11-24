@@ -48,6 +48,7 @@ export class WorkspacesService {
         },
       });
 
+      // Transaction-scoped audit write: guarantees atomic creation or full rollback
       await this.audit.logEvent({
         workspaceId: workspace.id,
         actorId,
@@ -55,6 +56,7 @@ export class WorkspacesService {
         entityType: 'Workspace',
         entityId: workspace.id,
         payload: { name: workspace.name, slug: workspace.slug },
+        tx,
       });
 
       return workspace;
